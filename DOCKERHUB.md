@@ -61,5 +61,8 @@ docker run --rm \
 ## 🔐 Password Protected PDFs
 The scanner automatically attempts to crack passwords. Use `-t` to change the brute-force timeout or `-w` to provide a custom wordlist:
 ```bash
-docker run --rm -v $(pwd):/data pdfanalyzer encrypted.pdf -w wordlist.txt -t 300
+docker run --rm -v $(pwd):/data kyberi/pdfanalyzer encrypted.pdf -w wordlist.txt -t 300
 ```
+
+## 📖 Full Documentation
+For complete documentation including entropy analysis, IoC extraction, YARA rules, MISP export, and risk scoring details, see the [GitHub README](https://github.com/Kyberi/PDFAnalyzer).

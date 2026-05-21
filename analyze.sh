@@ -483,27 +483,136 @@ VT_API_KEY="${VT_API_KEY:-}"
 if [[ -n "$VT_API_KEY" ]]; then
     print_section "VirusTotal — Cloud Hash Reputation"
     echo "  → Querying SHA256: $FILESHA"
-    VT_RESP=$(curl -s --max-time 10 -H "x-apikey: $VT_API_KEY" \
+    VT_RESP=$(curl -s --max-time 15 -H "x-apikey: $VT_API_KEY" \
         "https://www.virustotal.com/api/v3/files/$FILESHA" 2>/dev/null)
-    if echo "$VT_RESP" | grep -q '"not found"'; then
-        echo "  ℹ️  Hash not found in VirusTotal (file never submitted)"
-    elif [[ -z "$VT_RESP" ]]; then
-        echo "  ⚠️  VirusTotal request failed (check network / API key)"
+
+    if [[ -z "$VT_RESP" ]]; then
+        echo "  ⚠️  VirusTotal request failed (no response — check network)"
     else
-        python3 -c "
+        cat > /tmp/vt_parse.py << 'VTPY'
 import sys, json
-d = json.loads(sys.argv[1])
-stats = d.get('data',{}).get('attributes',{}).get('last_analysis_stats',{})
-results = d.get('data',{}).get('attributes',{}).get('last_analysis_results',{})
-mal = stats.get('malicious',0)
-total = sum(stats.values())
-print(f'  Detections : {mal} / {total} engines')
+
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("STATUS:ERROR")
+    print("  ⚠️  VirusTotal: invalid response (not JSON)")
+    sys.exit(0)
+
+# ── Handle API errors ──
+err = d.get("error")
+if err:
+    code = err.get("code", "")
+    msg  = err.get("message", "Unknown error")
+    if code == "NotFoundError":
+        print("STATUS:NOTFOUND")
+        print("  ℹ️  Hash not found in VirusTotal (file never submitted)")
+    elif code == "WrongCredentialsError":
+        print("STATUS:ERROR")
+        print("  ❌ VirusTotal: invalid API key")
+    elif code == "QuotaExceededError":
+        print("STATUS:ERROR")
+        print("  ⚠️  VirusTotal: API quota exceeded (try again later)")
+    elif code == "ForbiddenError":
+        print("STATUS:ERROR")
+        print("  ❌ VirusTotal: access forbidden (check API key permissions)")
+    else:
+        print("STATUS:ERROR")
+        print(f"  ⚠️  VirusTotal API error: {code} — {msg}")
+    sys.exit(0)
+
+# ── Parse successful response ──
+attrs = d.get("data", {}).get("attributes", {})
+if not attrs:
+    print("STATUS:ERROR")
+    print("  ⚠️  VirusTotal: unexpected response format (no attributes)")
+    sys.exit(0)
+
+stats   = attrs.get("last_analysis_stats", {})
+results = attrs.get("last_analysis_results", {})
+sha256  = attrs.get("sha256", "")
+
+mal     = stats.get("malicious", 0)
+susp    = stats.get("suspicious", 0)
+clean   = stats.get("harmless", 0) + stats.get("undetected", 0)
+total   = sum(stats.values())
+
+print(f"STATUS:OK:{mal}")
+
+# ── Detection ratio ──
 if mal > 0:
-    hits = [k for k,v in results.items() if v.get('category')=='malicious']
-    print('  Engines    : ' + ', '.join(hits[:8]))
-" "$VT_RESP" 2>/dev/null
-        MAL=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('data',{}).get('attributes',{}).get('last_analysis_stats',{}).get('malicious',0))" "$VT_RESP" 2>/dev/null)
-        [[ "${MAL:-0}" -gt 0 ]] && add_risk 100 "VirusTotal: $MAL engines flagged as malicious"
+    print(f"  🔴 Detections  : {mal} / {total} engines flagged as MALICIOUS")
+elif susp > 0:
+    print(f"  🟡 Detections  : {susp} / {total} engines flagged as SUSPICIOUS")
+else:
+    print(f"  🟢 Detections  : 0 / {total} engines — clean")
+
+# ── Threat classification ──
+pop = attrs.get("popular_threat_classification", {})
+label = pop.get("suggested_threat_label")
+if label:
+    print(f"  🏷️  Threat Label : {label}")
+
+categories = pop.get("popular_threat_category", [])
+if categories:
+    cat_str = ", ".join(f'{c["value"]} ({c["count"]})' for c in categories[:5])
+    print(f"  📂 Categories  : {cat_str}")
+
+names = pop.get("popular_threat_name", [])
+if names:
+    name_str = ", ".join(f'{n["value"]} ({n["count"]})' for n in names[:5])
+    print(f"  🔖 Threat Names: {name_str}")
+
+# ── Community reputation ──
+reputation = attrs.get("reputation")
+if reputation is not None:
+    if reputation < -10:
+        rep_icon = "🔴"
+    elif reputation < 0:
+        rep_icon = "🟡"
+    else:
+        rep_icon = "🟢"
+    print(f"  {rep_icon} Reputation  : {reputation}")
+
+# ── Tags ──
+tags = attrs.get("tags", [])
+if tags:
+    print(f"  🔗 Tags        : {', '.join(tags[:10])}")
+
+# ── Detection engines detail ──
+if mal > 0 or susp > 0:
+    print()
+    print("  ┌─────────────────────────────────────────────────────────┐")
+    print("  │  Engine Detections                                     │")
+    print("  └─────────────────────────────────────────────────────────┘")
+    hits = [(k, v.get("result", "—")) for k, v in results.items()
+            if v.get("category") in ("malicious", "suspicious")]
+    for eng, result in sorted(hits, key=lambda x: x[0])[:15]:
+        print(f"    ▸ {eng:<24} → {result}")
+    if len(hits) > 15:
+        print(f"    … and {len(hits) - 15} more engines")
+
+# ── File type info ──
+type_desc = attrs.get("type_description")
+if type_desc:
+    print(f"  📄 File Type   : {type_desc}")
+
+# ── Link ──
+if sha256:
+    print(f"  🌐 VT Link     : https://www.virustotal.com/gui/file/{sha256}")
+VTPY
+        VT_PARSED=$(echo "$VT_RESP" | python3 /tmp/vt_parse.py 2>/dev/null)
+        rm -f /tmp/vt_parse.py
+
+        echo "$VT_PARSED" | tail -n +2
+
+        # Extract malicious count from STATUS line
+        VT_STATUS=$(echo "$VT_PARSED" | head -1)
+        if [[ "$VT_STATUS" == STATUS:OK:* ]]; then
+            MAL="${VT_STATUS##STATUS:OK:}"
+            [[ "${MAL:-0}" -gt 0 ]] && add_risk 100 "VirusTotal: $MAL engines flagged as malicious"
+        fi
     fi
 fi
 

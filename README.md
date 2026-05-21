@@ -24,7 +24,6 @@ A containerized, multi-tool forensic pipeline for automated PDF security analysi
 | **ClamAV** | Local antivirus scan against ~300MB malware signature database |
 | **curl** | Cloud hash reputation lookup via VirusTotal API v3 |
 | **zbar-tools** | Extract and decode QR codes from embedded images (Quishing detection) |
-| **jq** | Used for JSON/MISP report formatting |
 
 ---
 
@@ -79,18 +78,18 @@ pdfanalyzer <file.pdf> [options]
 Options:
   <password>         Decrypt with known password
   -w <wordlist.txt>  Wordlist attack on encrypted PDF
-  -t <seconds>       Brute-force timeout (default: 120, or CRACK_TIMEOUT from .env)
+  -t <seconds>       Brute-force timeout (default: 120)
   --json             Write JSON report to /data/<name>.report.json
   --misp             Write MISP Core Format event to /data/<name>.misp.json
   --batch            Scan all *.pdf files in /data sequentially
 
-Environment variables (inline only):
-  VT_API_KEY=<key>   VirusTotal API key — pass inline, not stored in .env
+Environment variables:
+  VT_API_KEY=<key>   VirusTotal API key for cloud hash lookup
 ```
 
 ### ⚙️ Environment Variables
 
-All settings are passed via **CLI flags** or **inline environment variables**. There is no `.env` configuration file.
+All settings are passed via **CLI flags** or **environment variables** (`-e` flag).
 
 ```bash
 # Pass VT_API_KEY inline
@@ -178,7 +177,7 @@ sudo docker run --rm -v clamav_db:/var/lib/clamav --entrypoint freshclam pdfanal
 ### Brute-force behaviour
 
 - **RC4 / AES-128:** Uses `pdfcrack` with a 30-second hard limit.
-- **AES-256:** Uses `john` + `pdf2john` with a configurable timeout (`-t <seconds>` or `CRACK_TIMEOUT` env var, default 120s). Charset: `a-z`, `A-Z`, `0-9`, max 6 characters. After the run, prints the `john --status` summary (passwords tried, speed, progress).
+- **AES-256:** Uses `john` + `pdf2john` with a configurable timeout (`-t <seconds>`, default 120s). Charset: `a-z`, `A-Z`, `0-9`, max 6 characters. After the run, prints the `john --status` summary (passwords tried, speed, progress).
 - After cracking, `qpdf` decrypts the file and **all subsequent analysis stages run on the unlocked file**.
 
 ### Create a password-protected PDF for testing
@@ -234,9 +233,9 @@ The scanner computes **Shannon entropy** across three independent layers of the 
 
 | Layer | What it measures | Threshold | Risk added |
 |---|---|---|---|
-| **File Entropy** | Entire raw binary file | ≥ 7.9 / 8.0 | +15 |
-| **Text Entropy** | Visible text extracted by pdftotext/pdfminer | ≥ 6.0 / 8.0 | +10 |
-| **Strings Entropy** | All printable ASCII strings inside the binary | ≥ 6.5 / 8.0 | +10 |
+| **File Entropy** | Entire raw binary file | ≥ 7.9 / 8.0 | +20 |
+| **Text Entropy** | Visible text extracted by pdftotext/pdfminer | ≥ 6.0 / 8.0 | +15 |
+| **Strings Entropy** | All printable ASCII strings inside the binary | ≥ 6.5 / 8.0 | +15 |
 
 **Why three layers?**
 
@@ -265,7 +264,7 @@ The `strings` section performs automatic **Indicator of Compromise (IoC)** extra
 | **IP addresses** | IPv4 pattern `\b(N.N.N.N)\b` | Skips RFC-1918 private ranges (`10.`, `192.168.`, `172.`, `127.`) |
 | **Bitcoin wallets** | Legacy (`1...`/`3...`) + SegWit (`bc1...`) | Length-validated (25-39 chars) |
 
-Data is sourced from **both** the extracted visible text (`$TEXT`) **and** raw `strings` output, then deduplicated. If any IoC is found, **+15** is added to the risk score.
+Data is sourced from **both** the extracted visible text (`$TEXT`) **and** raw `strings` output, then deduplicated. If any IoC is found, **+10** is added to the risk score.
 
 ---
 
@@ -274,7 +273,7 @@ Data is sourced from **both** the extracted visible text (`$TEXT`) **and** raw `
 The scanner automatically:
 1. Extracts all embedded images from the PDF using `pdfimages -j`.
 2. Passes each image through `zbarimg` to detect and decode QR codes.
-3. Outputs the decoded URL/data and flags the file with **+15** risk points.
+3. Outputs the decoded URL/data and flags the file with **+10** risk points.
 
 This detects **Quishing** attacks — phishing PDFs that embed malicious QR codes instead of clickable links to bypass URL scanners.
 
@@ -301,7 +300,7 @@ Mount a directory of your own `.yar` files:
 sudo docker run --rm -v $(pwd):/data -v $(pwd)/yara_rules:/data/yara_rules kyberi/pdfanalyzer document.pdf
 ```
 
-All `.yar` files inside `/data/yara_rules/` are loaded and compiled alongside the built-in ruleset. Rule `severity` field in the `meta:` block drives risk scoring (HIGH +30, MEDIUM +15, LOW +5).
+All `.yar` files inside `/data/yara_rules/` are loaded and compiled alongside the built-in ruleset. Rule `severity` field in the `meta:` block drives risk scoring (HIGH +50, MEDIUM +20, LOW +5).
 
 ---
 
@@ -355,7 +354,7 @@ Writes a MISP Core Format event to `/data/<name>.misp.json`, ready for import in
 | pdfid: `/JS`, `/JavaScript`, `/OpenAction`, `/Launch`, etc. | +25 each |
 | peepdf: JavaScript detected | +25 |
 | strings: JavaScript keywords found | +25 |
-| pdfminer: phishing keywords in visible text | +20 |
+| Phishing keywords in visible text | +20 |
 | High file entropy (≥ 7.9) | +20 |
 | YARA MEDIUM severity match | +20 |
 | High text entropy (≥ 6.0) | +15 |
@@ -365,6 +364,7 @@ Writes a MISP Core Format event to `/data/<name>.misp.json`, ready for import in
 | Extracted Emails/IPs/Bitcoin wallets | +10 |
 | strings: external URLs found | +5 |
 | pdfid: `/EmbeddedFile` | +5 |
+| Encrypted PDF with empty password | +5 |
 | YARA LOW severity match | +5 |
 | PDF is password-protected | +5 |
 
@@ -388,7 +388,9 @@ PDFAnalyzer/
 ├── Dockerfile      # Multi-stage build (builder + runtime stages)
 ├── analyze.sh      # Main analysis script (all 13 stages)
 ├── entrypoint.sh   # ClamAV DB lifecycle + exec to analyze.sh
-├── .env.example    # Template for environment variables
+├── pdf.yar         # Built-in YARA rules for PDF malware detection
+├── DOCKERHUB.md    # Docker Hub description
+├── .gitignore
 └── README.md       # This file
 ```
 
@@ -442,4 +444,4 @@ sudo docker run --rm -v $(pwd):/data kyberi/pdfanalyzer protected.pdf test
 - **SOC workflow:** Use `--misp` to create MISP events automatically for each suspicious file.
 - **Custom threat rules:** Drop `.yar` files in a local `yara_rules/` folder and mount it to `/data/yara_rules`.
 - **Batch scanning:** Use `--batch` to process all PDFs in a directory sequentially.
-- **Long passwords:** Increase timeout with `-t 600` or set `CRACK_TIMEOUT=600` in `.env`.
+- **Long passwords:** Increase timeout with `-t 600` for brute-force cracking.

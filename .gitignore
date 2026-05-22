@@ -1,0 +1,21 @@
+# PDF files (test samples, analysis targets)
+*.pdf
+
+# Analysis output
+*.report.json
+*.misp.json
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# ClamAV database (large, downloaded at runtime)
+*.cvd
+*.cld

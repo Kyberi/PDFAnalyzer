@@ -8,7 +8,137 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-push:
+
+  # ── Job 1: Lint ──────────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+      - name: Lint GitHub Actions workflows (actionlint)
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint
+
+  # ── Job 2: Build + Test ─────────────────────────────────────────────────
+  build-and-test:
+    needs: lint
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      TEST_IMAGE: kyberi/pdfanalyzer:ci-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image for testing
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.TEST_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Smoke Test ──────────────────────────────────────────────────────
+      - name: "Test: smoke — container starts and shows help"
+        run: |
+          OUTPUT=$(docker run --rm "$TEST_IMAGE" --help)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "PDFAnalyzer" || { echo "FAIL: help output missing 'PDFAnalyzer'"; exit 1; }
+          echo "✅ Smoke test passed"
+
+      # ── Tool Verification ───────────────────────────────────────────────
+      - name: "Test: verify all forensic tools are installed"
+        run: |
+          docker run --rm --entrypoint bash "$TEST_IMAGE" -c '
+            set -e
+            echo "Checking tools..."
+
+            exiftool -ver        && echo "✅ exiftool"
+            pdftotext -v 2>&1    && echo "✅ pdftotext"
+            qpdf --version       && echo "✅ qpdf"
+            yara --version       && echo "✅ yara"
+            clamscan --version   && echo "✅ clamscan"
+            tesseract --version  && echo "✅ tesseract"
+            zbarimg --version 2>&1 | head -1 && echo "✅ zbarimg"
+            pdfcrack --version 2>&1 | head -1 && echo "✅ pdfcrack"
+            john 2>&1 | head -1  && echo "✅ john"
+            strings --version    && echo "✅ strings"
+            jq --version         && echo "✅ jq"
+            file --version       && echo "✅ file"
+
+            python3 /opt/pdftools/pdfid.py -h > /dev/null 2>&1 && echo "✅ pdfid.py"
+            python3 /opt/pdftools/pdf-parser.py -h > /dev/null 2>&1 && echo "✅ pdf-parser.py"
+            python3 -c "import yara" && echo "✅ yara-python"
+            python3 -c "import peepdf" && echo "✅ peepdf"
+            python3 -c "from pdfminer.high_level import extract_text" && echo "✅ pdfminer"
+
+            echo ""
+            echo "All tools verified ✅"
+          '
+
+      # ── Functional Test ─────────────────────────────────────────────────
+      - name: "Test: functional — generate test PDF and run analysis"
+        run: |
+          # Generate a minimal valid PDF
+          mkdir -p tests
+          python3 -c "
+          pdf = b'%PDF-1.4\n'
+          pdf += b'1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
+          pdf += b'2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
+          pdf += b'3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n'
+          xref_pos = len(pdf)
+          pdf += b'xref\n0 4\n'
+          pdf += b'0000000000 65535 f \n'
+          pdf += b'0000000009 00000 n \n'
+          pdf += b'0000000058 00000 n \n'
+          pdf += b'0000000115 00000 n \n'
+          pdf += b'trailer<</Size 4/Root 1 0 R>>\n'
+          pdf += f'startxref\n{xref_pos}\n%%EOF\n'.encode()
+          with open('tests/test_clean.pdf', 'wb') as f:
+              f.write(pdf)
+          "
+
+          # Run analysis (skip ClamAV — no DB in CI)
+          docker run --rm -v "${{ github.workspace }}/tests:/data" "$TEST_IMAGE" test_clean.pdf --json
+
+          # Verify JSON report was generated
+          if [ ! -f tests/test_clean.report.json ]; then
+            echo "FAIL: JSON report not generated"
+            exit 1
+          fi
+
+          # Verify risk level is LOW (clean PDF)
+          RISK=$(python3 -c "import json; d=json.load(open('tests/test_clean.report.json')); print(d['risk_level'])")
+          echo "Risk level: $RISK"
+          if [ "$RISK" != "LOW" ]; then
+            echo "FAIL: expected LOW risk for clean PDF, got $RISK"
+            exit 1
+          fi
+
+          echo "✅ Functional test passed"
+
+  # ── Job 3: Push ─────────────────────────────────────────────────────────
+  push:
+    needs: build-and-test
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -42,14 +172,14 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Update Docker Hub description
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'
         uses: peter-evans/dockerhub-description@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}

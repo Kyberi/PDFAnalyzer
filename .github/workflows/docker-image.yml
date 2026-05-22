@@ -17,10 +17,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
 
       - name: Lint Dockerfile (hadolint)
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab0d592db490a618d35ed35b5ff5ef282 # v3.1.0
         with:
           dockerfile: Dockerfile
           failure-threshold: error
@@ -40,13 +40,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5da7ee85e1352e3c1555d41793b584988ce # v4.0.0
 
       - name: Build image for testing
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@d08e5c3080008581e62164478347f8974a682910 # v7.0.0
         with:
           context: .
           file: ./Dockerfile
@@ -145,20 +145,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@4d04d5da7ee85e1352e3c1555d41793b584988ce # v4.0.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6d8c474d1db2e0fa902244b05f27cfde2a2 # v4.1.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@030e881122fd229a43a05f1d411b7dfb814a7e3d # v6.0.0
         with:
           images: kyberi/pdfanalyzer
           tags: |
@@ -168,7 +168,7 @@ jobs:
             type=ref,event=pr
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@d08e5c3080008581e62164478347f8974a682910 # v7.0.0
         with:
           context: .
           file: ./Dockerfile
@@ -180,7 +180,7 @@ jobs:
 
       - name: Update Docker Hub description
         if: github.ref == 'refs/heads/main'
-        uses: peter-evans/dockerhub-description@v4
+        uses: peter-evans/dockerhub-description@e98e4d1628a5f3be2be7c231e50981aee98723ae # v4.0.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}

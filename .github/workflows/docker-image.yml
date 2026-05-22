@@ -26,7 +26,9 @@ jobs:
           failure-threshold: error
 
       - name: Lint GitHub Actions workflows (actionlint)
-        uses: raven-actions/actionlint@v2
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint
 
   # ── Job 2: Build + Test ─────────────────────────────────────────────────
   build-and-test:

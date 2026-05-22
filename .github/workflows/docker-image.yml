@@ -59,7 +59,7 @@ jobs:
       # ── Smoke Test ──────────────────────────────────────────────────────
       - name: "Test: smoke — container starts and shows help"
         run: |
-          OUTPUT=$(docker run --rm $TEST_IMAGE --help)
+          OUTPUT=$(docker run --rm "$TEST_IMAGE" --help)
           echo "$OUTPUT"
           echo "$OUTPUT" | grep -q "PDFAnalyzer" || { echo "FAIL: help output missing 'PDFAnalyzer'"; exit 1; }
           echo "✅ Smoke test passed"
@@ -67,7 +67,7 @@ jobs:
       # ── Tool Verification ───────────────────────────────────────────────
       - name: "Test: verify all forensic tools are installed"
         run: |
-          docker run --rm --entrypoint bash $TEST_IMAGE -c '
+          docker run --rm --entrypoint bash "$TEST_IMAGE" -c '
             set -e
             echo "Checking tools..."
 
@@ -117,7 +117,7 @@ jobs:
           "
 
           # Run analysis (skip ClamAV — no DB in CI)
-          docker run --rm -v ${{ github.workspace }}/tests:/data $TEST_IMAGE test_clean.pdf --json
+          docker run --rm -v "${{ github.workspace }}/tests:/data" "$TEST_IMAGE" test_clean.pdf --json
 
           # Verify JSON report was generated
           if [ ! -f tests/test_clean.report.json ]; then

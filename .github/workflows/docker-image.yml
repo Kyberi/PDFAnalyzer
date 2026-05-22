@@ -26,7 +26,7 @@ jobs:
           failure-threshold: error
 
       - name: Lint GitHub Actions workflows (actionlint)
-        uses: rhysd/actionlint-action@v1
+        uses: raven-actions/actionlint@v2
 
   # ── Job 2: Build + Test ─────────────────────────────────────────────────
   build-and-test:
